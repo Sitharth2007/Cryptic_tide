@@ -89,7 +89,7 @@ def get_round_status(admin=Depends(require_admin)):
 @router.post("/rounds/start")
 def start_round(admin=Depends(require_admin)):
     """
-    Start Round 1. Idempotent — repeated calls return error if already started.
+    Start Round 1. Can start from NOT_STARTED or restart from COMPLETED.
     Updates round status to ACTIVE, which triggers Supabase Realtime for participants.
     """
     supabase = get_supabase()
@@ -102,15 +102,15 @@ def start_round(admin=Depends(require_admin)):
     current_status = round_data.data[0]["status"]
     if current_status == "ACTIVE":
         raise HTTPException(status_code=409, detail="Round 1 is already active.")
-    if current_status == "COMPLETED":
-        raise HTTPException(status_code=409, detail="Round 1 has already completed.")
 
+    # Allow restarting from COMPLETED state
     supabase.table("rounds").update({
         "status": "ACTIVE",
         "started_at": now.isoformat(),
+        "ended_at": None,
     }).eq("id", ROUND_ID).execute()
 
-    return {"success": True, "started_at": now.isoformat()}
+    return {"success": True, "started_at": now.isoformat(), "restarted": current_status == "COMPLETED"}
 
 
 @router.post("/rounds/end")
@@ -125,6 +125,38 @@ def end_round(admin=Depends(require_admin)):
     }).eq("id", ROUND_ID).execute()
 
     return {"success": True, "ended_at": now.isoformat()}
+
+
+@router.post("/rounds/reset")
+def reset_round(admin=Depends(require_admin)):
+    """
+    Full reset: sets round back to NOT_STARTED and clears all attempt/answer data.
+    Use this for a completely fresh start.
+    """
+    supabase = get_supabase()
+
+    # Delete all answers for this round's attempts
+    attempts = supabase.table("attempts").select("id").eq("round_id", ROUND_ID).execute()
+    for a in (attempts.data or []):
+        supabase.table("answers").delete().eq("attempt_id", a["id"]).execute()
+
+    # Delete all attempts for this round
+    supabase.table("attempts").delete().eq("round_id", ROUND_ID).execute()
+
+    # Reset round status
+    supabase.table("rounds").update({
+        "status": "NOT_STARTED",
+        "started_at": None,
+        "ended_at": None,
+    }).eq("id", ROUND_ID).execute()
+
+    # Reset team acknowledgements
+    supabase.table("teams").update({
+        "rules_acknowledged": False,
+        "rules_acknowledged_at": None,
+    }).neq("id", "").execute()
+
+    return {"success": True, "message": "Round fully reset. All attempts and answers cleared."}
 
 
 @router.get("/leaderboard")

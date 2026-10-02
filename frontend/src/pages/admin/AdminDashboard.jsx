@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/apiClient';
 import {
   LayoutDashboard, Users, Trophy, Star, Download,
-  Play, Square, LogOut, RefreshCw, AlertTriangle
+  Play, Square, LogOut, RefreshCw, AlertTriangle, RotateCcw
 } from 'lucide-react';
 
 // ─── Overview Tab ──────────────────────────────────────────────────────────
@@ -14,7 +14,9 @@ function OverviewTab() {
   const [teams, setTeams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
 
@@ -35,12 +37,25 @@ function OverviewTab() {
   async function handleStart() {
     setStarting(true); setMsg(''); setError('');
     try {
-      await api.post('/api/admin/rounds/start');
-      setMsg('Round 1 started! Participants are being notified via Realtime.');
+      const res = await api.post('/api/admin/rounds/start');
+      setMsg(res.restarted
+        ? 'Round 1 restarted! Participants are being notified via Realtime.'
+        : 'Round 1 started! Participants are being notified via Realtime.');
       setConfirm(false);
       load();
     } catch (e) { setError(e.message); }
     finally { setStarting(false); }
+  }
+
+  async function handleReset() {
+    setResetting(true); setMsg(''); setError('');
+    try {
+      await api.post('/api/admin/rounds/reset');
+      setMsg('Round fully reset! All attempts and answers cleared. Ready for a fresh start.');
+      setConfirmReset(false);
+      load();
+    } catch (e) { setError(e.message); }
+    finally { setResetting(false); }
   }
 
   if (loading) return <div style={{ padding: '3rem', textAlign: 'center' }}><div className="spinner" /></div>;
@@ -95,6 +110,16 @@ function OverviewTab() {
                 <Square size={14} /> End Round
               </button>
             )}
+            {round?.status === 'COMPLETED' && (
+              <>
+                <button id="restart-round-btn" className="btn btn-gold" onClick={() => setConfirm(true)} disabled={starting}>
+                  <Play size={14} /> Restart Round
+                </button>
+                <button className="btn btn-danger" onClick={() => setConfirmReset(true)} disabled={resetting}>
+                  <RotateCcw size={14} /> Full Reset
+                </button>
+              </>
+            )}
             <button className="btn btn-outline btn-sm" onClick={load}><RefreshCw size={14} /></button>
           </div>
         </div>
@@ -103,7 +128,7 @@ function OverviewTab() {
         {error && <div className="error-banner" style={{ marginTop: '1rem' }}>{error}</div>}
       </div>
 
-      {/* Confirm Dialog */}
+      {/* Confirm Start/Restart Dialog */}
       {confirm && (
         <div className="modal-overlay" onClick={() => setConfirm(false)}>
           <div className="modal-box" onClick={e => e.stopPropagation()}>
@@ -111,18 +136,47 @@ function OverviewTab() {
               <AlertTriangle size={24} color="var(--gold-amber)" />
               <div>
                 <div style={{ fontFamily: 'var(--font-display)', fontSize: '1rem', color: 'var(--gold-bright)', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
-                  START ROUND 1?
+                  {round?.status === 'COMPLETED' ? 'RESTART ROUND 1?' : 'START ROUND 1?'}
                 </div>
                 <p style={{ fontSize: '0.9rem', color: 'rgba(255,248,231,0.6)', lineHeight: 1.6 }}>
-                  This will begin the live quiz for all participants in the waiting room.<br />
-                  This action cannot be undone.
+                  {round?.status === 'COMPLETED'
+                    ? <>This will reactivate Round 1. Existing attempts and scores will be preserved.<br />Participants will be notified via Realtime.</>
+                    : <>This will begin the live quiz for all participants in the waiting room.<br />This action cannot be undone.</>
+                  }
                 </p>
               </div>
             </div>
             <div style={{ display: 'flex', gap: '0.75rem' }}>
               <button className="btn btn-outline btn-full" onClick={() => setConfirm(false)}>Cancel</button>
               <button id="confirm-start-btn" className="btn btn-gold btn-full" onClick={handleStart} disabled={starting}>
-                {starting ? 'Starting...' : 'Start Round 1'}
+                {starting ? 'Starting...' : round?.status === 'COMPLETED' ? 'Restart Round 1' : 'Start Round 1'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Full Reset Dialog */}
+      {confirmReset && (
+        <div className="modal-overlay" onClick={() => setConfirmReset(false)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
+              <AlertTriangle size={24} color="#f87171" />
+              <div>
+                <div style={{ fontFamily: 'var(--font-display)', fontSize: '1rem', color: '#f87171', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>
+                  FULL RESET — ARE YOU SURE?
+                </div>
+                <p style={{ fontSize: '0.9rem', color: 'rgba(255,248,231,0.6)', lineHeight: 1.6 }}>
+                  This will <strong style={{ color: '#f87171' }}>permanently delete</strong> all attempts, answers, and scores.<br />
+                  Team acknowledgements will be reset. The round will go back to NOT_STARTED.<br />
+                  <strong>This cannot be undone.</strong>
+                </p>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <button className="btn btn-outline btn-full" onClick={() => setConfirmReset(false)}>Cancel</button>
+              <button className="btn btn-danger btn-full" onClick={handleReset} disabled={resetting}>
+                {resetting ? 'Resetting...' : 'Yes, Reset Everything'}
               </button>
             </div>
           </div>
