@@ -1,90 +1,113 @@
 /**
- * Auth Context — handles Supabase OTP login and server-derived role.
- * Role is ALWAYS fetched from /api/me (server-authoritative).
- * The frontend NEVER derives role from email or localStorage.
+ * Auth Context — Custom JWT team authentication.
+ * Replaces Supabase OTP/email flow with password-based team login.
+ * JWT token is stored in localStorage. Role is server-derived from /api/me.
+ * Frontend NEVER derives role from the JWT payload directly.
  */
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { supabase } from '../services/supabaseClient';
 import { api } from '../services/apiClient';
 
 const AuthContext = createContext(null);
 
+const TOKEN_KEY = 'cryptictide_token';
+
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null);
-  const [user, setUser] = useState(null);       // server-derived user info
-  const [role, setRole] = useState(null);       // 'ADMIN' | 'PARTICIPANT' | 'UNREGISTERED'
+  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY));
+  const [user, setUser] = useState(null);         // server-derived user info
+  const [role, setRole] = useState(null);          // 'ADMIN' | 'PARTICIPANT'
   const [teamInfo, setTeamInfo] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [authError, setAuthError] = useState(null);
 
-  const fetchServerRole = useCallback(async () => {
+  const fetchServerRole = useCallback(async (accessToken) => {
     try {
-      const me = await api.get('/api/me');
+      const me = await api.get('/api/me', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
       setRole(me.role);
       setUser(me);
       if (me.team_id) {
-        setTeamInfo({ team_id: me.team_id, team_name: me.team_name });
+        setTeamInfo({
+          team_id: me.team_id,
+          team_name: me.team_name,
+          team_number: me.team_number,
+        });
       }
+      return me;
     } catch (err) {
-      setRole(null);
-      setUser(null);
+      // If the server rejects the token (expired / invalidated by another login),
+      // clear everything so the user is redirected to login.
+      clearAuth();
+      return null;
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      setSession(s);
-      if (s) {
-        fetchServerRole().finally(() => setLoading(false));
-      } else {
-        setLoading(false);
-      }
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-      if (s) {
-        fetchServerRole();
-      } else {
-        setRole(null);
-        setUser(null);
-        setTeamInfo(null);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    const storedToken = localStorage.getItem(TOKEN_KEY);
+    if (storedToken) {
+      fetchServerRole(storedToken).finally(() => setLoading(false));
+    } else {
+      setLoading(false);
+    }
   }, [fetchServerRole]);
 
-  const sendOTP = async (email) => {
-    setAuthError(null);
-    const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
-    if (error) {
-      // For unregistered emails Supabase returns error — show user-friendly message
-      if (error.message.includes('not allowed') || error.message.includes('Signups not allowed')) {
-        throw new Error('This email is not registered for the event. Please register first.');
-      }
-      throw new Error(error.message);
-    }
-  };
+  // ─── Token helpers ──────────────────────────────────────────────────────────
+  function saveToken(newToken) {
+    localStorage.setItem(TOKEN_KEY, newToken);
+    setToken(newToken);
+  }
 
-  const verifyOTP = async (email, token) => {
-    setAuthError(null);
-    const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
-    if (error) throw new Error(error.message || 'Invalid or expired OTP.');
-    // Role will be fetched via onAuthStateChange
-  };
-
-  const signOut = async () => {
-    await supabase.auth.signOut();
+  function clearAuth() {
+    localStorage.removeItem(TOKEN_KEY);
+    setToken(null);
     setRole(null);
     setUser(null);
     setTeamInfo(null);
+  }
+
+  // ─── Team Login ─────────────────────────────────────────────────────────────
+  const teamLogin = async (email, password) => {
+    const data = await api.post('/api/auth/login', { email, password });
+    // data = { access_token, token_type, team: {...} }
+    saveToken(data.access_token);
+    await fetchServerRole(data.access_token);
+    return data;
   };
+
+  // ─── Admin Login ────────────────────────────────────────────────────────────
+  const adminLogin = async (email, password) => {
+    const data = await api.post('/api/auth/admin/login', { email, password });
+    saveToken(data.access_token);
+    // For admin, role is derived from /api/me or admin payload
+    setRole('ADMIN');
+    setUser({ email, role: 'ADMIN', ...data.admin });
+    return data;
+  };
+
+  // ─── Logout ─────────────────────────────────────────────────────────────────
+  const signOut = async () => {
+    const currentToken = localStorage.getItem(TOKEN_KEY);
+    try {
+      if (currentToken) {
+        await api.post('/api/auth/logout', {}, {
+          headers: { Authorization: `Bearer ${currentToken}` },
+        });
+      }
+    } catch (_) {
+      // Ignore logout errors — clear local state regardless
+    } finally {
+      clearAuth();
+    }
+  };
+
+  // Expose the raw token so apiClient can use it
+  const getToken = () => localStorage.getItem(TOKEN_KEY);
 
   return (
     <AuthContext.Provider value={{
-      session, user, role, teamInfo, loading, authError,
-      sendOTP, verifyOTP, signOut, fetchServerRole,
+      token, user, role, teamInfo, loading,
+      teamLogin, adminLogin, signOut, fetchServerRole, getToken,
+      // Legacy shims — keep these so any old code calling them doesn't crash
+      session: token ? { access_token: token } : null,
     }}>
       {children}
     </AuthContext.Provider>

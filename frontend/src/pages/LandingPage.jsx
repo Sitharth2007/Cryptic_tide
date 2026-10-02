@@ -1,4 +1,5 @@
-import { Link } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { Compass, Shield, Zap, Trophy, Clock, Users } from 'lucide-react';
 
 const PALETTE = ['#F4C542','#087E8B','#FF7A18','#00A6A6','#D99A2B','#E85D04'];
@@ -41,6 +42,14 @@ const features = [
 ];
 
 export default function LandingPage() {
+  const { session, role, loading } = useAuth();
+
+  // Redirect if user is authenticated via magic link or existing session
+  if (!loading && session && role) {
+    if (role === 'ADMIN' || role === 'SUPER_ADMIN') return <Navigate to="/admin" replace />;
+    if (role === 'PARTICIPANT') return <Navigate to="/participant" replace />;
+    return <Navigate to="/unauthorized" replace />;
+  }
   return (
     <div className="ocean-bg" style={{ minHeight: '100vh' }}>
       {/* Hero */}

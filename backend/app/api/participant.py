@@ -3,7 +3,7 @@ Participant API routes.
 All endpoints require authentication + team verification.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from app.auth.dependencies import get_current_user, get_verified_participant
+from app.auth.dependencies import get_current_team, get_verified_participant
 from app.database.client import get_supabase
 from app.services import quiz_engine
 from app.schemas.models import (
@@ -24,7 +24,7 @@ def utc_now():
 
 
 @router.get("/team")
-async def get_my_team(auth=Depends(get_verified_participant)):
+def get_my_team(auth=Depends(get_verified_participant)):
     """Returns the authenticated team's info + members."""
     supabase = get_supabase()
     team = auth["team"]
@@ -43,23 +43,22 @@ async def get_my_team(auth=Depends(get_verified_participant)):
 
 
 @router.get("/round-status")
-async def get_round_status(auth=Depends(get_verified_participant)):
+def get_round_status(auth=Depends(get_verified_participant)):
     """Returns the current round state (NOT_STARTED / ACTIVE / COMPLETED)."""
     supabase = get_supabase()
     result = (
         supabase.table("rounds")
         .select("id, name, round_number, status, started_at")
         .eq("id", ROUND_ID)
-        .single()
         .execute()
     )
-    if not result.data:
+    if not result or not result.data or len(result.data) == 0:
         raise HTTPException(status_code=404, detail="Round not found.")
-    return result.data
+    return result.data[0]
 
 
 @router.post("/rules-acknowledge")
-async def acknowledge_rules(auth=Depends(get_verified_participant)):
+def acknowledge_rules(auth=Depends(get_verified_participant)):
     """Records that the team lead has acknowledged the rules."""
     supabase = get_supabase()
     team_id = auth["team"]["id"]
@@ -74,7 +73,7 @@ async def acknowledge_rules(auth=Depends(get_verified_participant)):
 
 
 @router.get("/attempt")
-async def get_my_attempt(auth=Depends(get_verified_participant)):
+def get_my_attempt(auth=Depends(get_verified_participant)):
     """Returns the team's current attempt state (used for refresh/resume)."""
     supabase = get_supabase()
     team_id = auth["team"]["id"]
@@ -84,15 +83,14 @@ async def get_my_attempt(auth=Depends(get_verified_participant)):
         .select("id, status, score, correct_count, wrong_count, skipped_count, started_at, submitted_at, completion_time_seconds")
         .eq("team_id", team_id)
         .eq("round_id", ROUND_ID)
-        .maybe_single()
         .execute()
     )
 
-    return result.data or {"status": "NOT_STARTED"}
+    return (result.data[0] if (result and result.data and len(result.data) > 0) else {"status": "NOT_STARTED"})
 
 
 @router.post("/start")
-async def start_quiz(auth=Depends(get_verified_participant)):
+def start_quiz(auth=Depends(get_verified_participant)):
     """
     Starts or resumes the participant's quiz attempt.
     Idempotent — safe to call if attempt already exists.
@@ -101,14 +99,14 @@ async def start_quiz(auth=Depends(get_verified_participant)):
     team = auth["team"]
 
     # Verify round is ACTIVE
-    round_data = supabase.table("rounds").select("status").eq("id", ROUND_ID).single().execute()
-    if not round_data.data or round_data.data["status"] != "ACTIVE":
+    round_data = supabase.table("rounds").select("status").eq("id", ROUND_ID).execute()
+    if not round_data or not round_data.data or round_data.data[0]["status"] != "ACTIVE":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Round 1 has not started yet. Please wait in the waiting room.",
         )
 
-    attempt = await quiz_engine.get_or_create_attempt(team["id"], ROUND_ID)
+    attempt = quiz_engine.get_or_create_attempt(team["id"], ROUND_ID)
 
     if attempt["status"] == "SUBMITTED":
         raise HTTPException(
@@ -120,7 +118,7 @@ async def start_quiz(auth=Depends(get_verified_participant)):
 
 
 @router.get("/current-question")
-async def get_current_question(auth=Depends(get_verified_participant)):
+def get_current_question(auth=Depends(get_verified_participant)):
     """
     Returns the current question (no correct_answer) + server deadline.
     If the previous question timed out, auto-records TIMEOUT answer first.
@@ -133,14 +131,13 @@ async def get_current_question(auth=Depends(get_verified_participant)):
         .select("*")
         .eq("team_id", team_id)
         .eq("round_id", ROUND_ID)
-        .maybe_single()
         .execute()
     )
 
-    if not attempt.data:
+    if not attempt or not attempt.data or len(attempt.data) == 0:
         raise HTTPException(status_code=400, detail="Quiz not started.")
 
-    a = attempt.data
+    a = attempt.data[0]
     if a["status"] == "SUBMITTED":
         raise HTTPException(status_code=400, detail="Quiz already completed.")
 
@@ -156,11 +153,10 @@ async def get_current_question(auth=Depends(get_verified_participant)):
                 .select("id")
                 .eq("attempt_id", a["id"])
                 .eq("question_id", a["current_question_id"])
-                .maybe_single()
                 .execute()
             )
-            if not existing.data:
-                await quiz_engine.process_answer(
+            if not existing or not existing.data:
+                quiz_engine.process_answer(
                     a["id"], a["current_question_id"], "TIMEOUT_AUTO", ROUND_ID
                 )
             # Refresh attempt
@@ -168,22 +164,21 @@ async def get_current_question(auth=Depends(get_verified_participant)):
                 supabase.table("attempts")
                 .select("*")
                 .eq("id", a["id"])
-                .single()
                 .execute()
             )
-            a = attempt.data
+            a = attempt.data[0] if (attempt and attempt.data) else a
 
     if a["status"] == "SUBMITTED":
         return {"quiz_complete": True}
 
     # Get next question
-    question = await quiz_engine.get_current_question(a["id"], ROUND_ID)
+    question = quiz_engine.get_current_question(a["id"], ROUND_ID)
     if not question:
         return {"quiz_complete": True}
 
     # Set timer if not already set or if it's a new question
     if a.get("current_question_id") != question["id"]:
-        deadline = await quiz_engine.start_question_timer(a["id"], question["id"])
+        deadline = quiz_engine.start_question_timer(a["id"], question["id"])
     else:
         raw_dl = a.get("current_question_deadline")
         deadline = datetime.fromisoformat(raw_dl.replace("Z", "+00:00")) if isinstance(raw_dl, str) else raw_dl
@@ -216,7 +211,7 @@ async def get_current_question(auth=Depends(get_verified_participant)):
 
 
 @router.post("/answer")
-async def submit_answer(body: AnswerSubmit, auth=Depends(get_verified_participant)):
+def submit_answer(body: AnswerSubmit, auth=Depends(get_verified_participant)):
     """
     Submit answer for the current question.
     Backend validates timing, correctness, and prevents duplicates.
@@ -229,17 +224,16 @@ async def submit_answer(body: AnswerSubmit, auth=Depends(get_verified_participan
         .select("id, status")
         .eq("team_id", team_id)
         .eq("round_id", ROUND_ID)
-        .maybe_single()
         .execute()
     )
 
-    if not attempt.data:
+    if not attempt or not attempt.data or len(attempt.data) == 0:
         raise HTTPException(status_code=400, detail="Quiz not started.")
-    if attempt.data["status"] == "SUBMITTED":
+    if attempt.data[0]["status"] == "SUBMITTED":
         raise HTTPException(status_code=400, detail="Quiz already completed.")
 
-    result = await quiz_engine.process_answer(
-        attempt.data["id"],
+    result = quiz_engine.process_answer(
+        attempt.data[0]["id"],
         body.question_id,
         body.selected_answer,
         ROUND_ID,
@@ -251,13 +245,13 @@ async def submit_answer(body: AnswerSubmit, auth=Depends(get_verified_participan
     # Get next question if not complete
     next_q = None
     if not result["quiz_complete"]:
-        next_q_data = await quiz_engine.get_current_question(attempt.data["id"], ROUND_ID)
+        next_q_data = quiz_engine.get_current_question(attempt.data[0]["id"], ROUND_ID)
         if next_q_data:
-            deadline = await quiz_engine.start_question_timer(attempt.data["id"], next_q_data["id"])
+            deadline = quiz_engine.start_question_timer(attempt.data[0]["id"], next_q_data["id"])
             answered_count = (
                 supabase.table("answers")
                 .select("id", count="exact")
-                .eq("attempt_id", attempt.data["id"])
+                .eq("attempt_id", attempt.data[0]["id"])
                 .execute()
             )
             questions_done = answered_count.count or 0
@@ -284,7 +278,7 @@ async def submit_answer(body: AnswerSubmit, auth=Depends(get_verified_participan
 
 
 @router.get("/completion")
-async def get_completion(auth=Depends(get_verified_participant)):
+def get_completion(auth=Depends(get_verified_participant)):
     """Returns completion status without exposing score (admin controls reveal timing)."""
     supabase = get_supabase()
     team_id = auth["team"]["id"]
@@ -294,15 +288,14 @@ async def get_completion(auth=Depends(get_verified_participant)):
         .select("status, submitted_at, correct_count, wrong_count, skipped_count")
         .eq("team_id", team_id)
         .eq("round_id", ROUND_ID)
-        .maybe_single()
         .execute()
     )
 
-    if not attempt.data or attempt.data["status"] != "SUBMITTED":
+    if not attempt or not attempt.data or attempt.data[0]["status"] != "SUBMITTED":
         raise HTTPException(status_code=400, detail="Round not completed yet.")
 
     return {
         "completed": True,
-        "submitted_at": attempt.data.get("submitted_at"),
+        "submitted_at": attempt.data[0].get("submitted_at"),
         "message": "Round 1 complete. Results will be announced by the organizers.",
     }

@@ -19,7 +19,7 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def get_or_create_attempt(team_id: str, round_id: str) -> dict:
+def get_or_create_attempt(team_id: str, round_id: str) -> dict:
     """
     Returns existing attempt or creates a new one for the team+round.
     Uses a race-safe upsert. Only one attempt per team per round allowed.
@@ -31,12 +31,11 @@ async def get_or_create_attempt(team_id: str, round_id: str) -> dict:
         .select("*")
         .eq("team_id", team_id)
         .eq("round_id", round_id)
-        .maybe_single()
         .execute()
     )
 
-    if existing.data:
-        return existing.data
+    if existing and existing.data and len(existing.data) > 0:
+        return existing.data[0]
 
     # Create new attempt
     result = supabase.table("attempts").insert({
@@ -53,7 +52,7 @@ async def get_or_create_attempt(team_id: str, round_id: str) -> dict:
     return result.data[0]
 
 
-async def get_current_question(attempt_id: str, round_id: str) -> dict | None:
+def get_current_question(attempt_id: str, round_id: str) -> dict | None:
     """
     Returns the next unanswered question for this attempt, or None if complete.
     """
@@ -87,7 +86,7 @@ async def get_current_question(attempt_id: str, round_id: str) -> dict | None:
     return None  # All questions answered
 
 
-async def start_question_timer(attempt_id: str, question_id: str) -> datetime:
+def start_question_timer(attempt_id: str, question_id: str) -> datetime:
     """
     Records question_started_at and question_deadline for the current question in the attempt.
     Returns the absolute UTC deadline.
@@ -105,25 +104,24 @@ async def start_question_timer(attempt_id: str, question_id: str) -> datetime:
     return deadline
 
 
-async def get_active_deadline(attempt_id: str) -> datetime | None:
+def get_active_deadline(attempt_id: str) -> datetime | None:
     """Returns the server-set deadline for the current question."""
     supabase = get_supabase()
     result = (
         supabase.table("attempts")
         .select("current_question_deadline")
         .eq("id", attempt_id)
-        .single()
         .execute()
     )
-    if result.data and result.data.get("current_question_deadline"):
-        dl = result.data["current_question_deadline"]
+    if result and result.data and len(result.data) > 0 and result.data[0].get("current_question_deadline"):
+        dl = result.data[0]["current_question_deadline"]
         if isinstance(dl, str):
             return datetime.fromisoformat(dl.replace("Z", "+00:00"))
         return dl
     return None
 
 
-async def process_answer(
+def process_answer(
     attempt_id: str,
     question_id: str,
     selected_answer: str,
@@ -146,14 +144,13 @@ async def process_answer(
         .select("id, result")
         .eq("attempt_id", attempt_id)
         .eq("question_id", question_id)
-        .maybe_single()
         .execute()
     )
-    if existing_answer.data:
-        return {"already_answered": True, "result": existing_answer.data["result"]}
+    if existing_answer and existing_answer.data and len(existing_answer.data) > 0:
+        return {"already_answered": True, "result": existing_answer.data[0]["result"]}
 
     # 2. Server deadline check
-    deadline = await get_active_deadline(attempt_id)
+    deadline = get_active_deadline(attempt_id)
     is_timeout = deadline is not None and now > deadline
 
     # 3. Get correct answer from server (NEVER sent to frontend)
@@ -161,10 +158,9 @@ async def process_answer(
         supabase.table("questions")
         .select("correct_answer")
         .eq("id", question_id)
-        .single()
         .execute()
     )
-    correct = question.data["correct_answer"] if question.data else None
+    correct = question.data[0]["correct_answer"] if (question and question.data and len(question.data) > 0) else None
 
     # 4. Determine result and points
     if is_timeout or selected_answer == "SKIP":
@@ -196,8 +192,8 @@ async def process_answer(
     }).execute()
 
     # 6. Update attempt score and counts
-    attempt = supabase.table("attempts").select("*").eq("id", attempt_id).single().execute()
-    a = attempt.data
+    attempt = supabase.table("attempts").select("*").eq("id", attempt_id).execute()
+    a = attempt.data[0]
     update = {
         "score": a["score"] + points,
         "correct_count": a["correct_count"] + (1 if result_val == "CORRECT" else 0),
@@ -219,8 +215,8 @@ async def process_answer(
 
     if quiz_complete:
         # Calculate completion time
-        fresh = supabase.table("attempts").select("started_at").eq("id", attempt_id).single().execute()
-        started = datetime.fromisoformat(fresh.data["started_at"].replace("Z", "+00:00"))
+        fresh = supabase.table("attempts").select("started_at").eq("id", attempt_id).execute()
+        started = datetime.fromisoformat(fresh.data[0]["started_at"].replace("Z", "+00:00"))
         completion_secs = int((now - started).total_seconds())
 
         supabase.table("attempts").update({

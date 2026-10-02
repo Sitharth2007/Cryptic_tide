@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str
     SUPABASE_ANON_KEY: str
     SECRET_KEY: str = "change-me-in-production"
+    JWT_SECRET_KEY: str = "change-me-jwt-secret-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRY_HOURS: int = 12
     ALLOWED_ORIGINS: str = "http://localhost:5173"
 
     @property

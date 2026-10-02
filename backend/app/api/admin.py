@@ -21,7 +21,7 @@ def utc_now():
 
 
 @router.get("/dashboard")
-async def get_dashboard(admin=Depends(require_admin)):
+def get_dashboard(admin=Depends(require_admin)):
     """Dashboard stats — realtime counts."""
     supabase = get_supabase()
 
@@ -48,7 +48,7 @@ async def get_dashboard(admin=Depends(require_admin)):
 
 
 @router.get("/teams")
-async def list_teams(admin=Depends(require_admin)):
+def list_teams(admin=Depends(require_admin)):
     """All registered teams with their attempt status."""
     supabase = get_supabase()
 
@@ -80,14 +80,14 @@ async def list_teams(admin=Depends(require_admin)):
 
 
 @router.get("/round-status")
-async def get_round_status(admin=Depends(require_admin)):
+def get_round_status(admin=Depends(require_admin)):
     supabase = get_supabase()
-    result = supabase.table("rounds").select("*").eq("id", ROUND_ID).single().execute()
-    return result.data
+    result = supabase.table("rounds").select("*").eq("id", ROUND_ID).execute()
+    return result.data[0] if (result and result.data and len(result.data) > 0) else {}
 
 
 @router.post("/rounds/start")
-async def start_round(admin=Depends(require_admin)):
+def start_round(admin=Depends(require_admin)):
     """
     Start Round 1. Idempotent — repeated calls return error if already started.
     Updates round status to ACTIVE, which triggers Supabase Realtime for participants.
@@ -95,11 +95,11 @@ async def start_round(admin=Depends(require_admin)):
     supabase = get_supabase()
     now = utc_now()
 
-    round_data = supabase.table("rounds").select("status").eq("id", ROUND_ID).single().execute()
-    if not round_data.data:
+    round_data = supabase.table("rounds").select("status").eq("id", ROUND_ID).execute()
+    if not round_data or not round_data.data or len(round_data.data) == 0:
         raise HTTPException(status_code=404, detail="Round not found.")
 
-    current_status = round_data.data["status"]
+    current_status = round_data.data[0]["status"]
     if current_status == "ACTIVE":
         raise HTTPException(status_code=409, detail="Round 1 is already active.")
     if current_status == "COMPLETED":
@@ -114,7 +114,7 @@ async def start_round(admin=Depends(require_admin)):
 
 
 @router.post("/rounds/end")
-async def end_round(admin=Depends(require_admin)):
+def end_round(admin=Depends(require_admin)):
     """End Round 1."""
     supabase = get_supabase()
     now = utc_now()
@@ -128,7 +128,7 @@ async def end_round(admin=Depends(require_admin)):
 
 
 @router.get("/leaderboard")
-async def get_leaderboard(admin=Depends(require_admin)):
+def get_leaderboard(admin=Depends(require_admin)):
     """
     Ranked leaderboard — ORDER BY score DESC, completion_time_seconds ASC.
     This is the EXACT ranking rule as specified.
@@ -171,10 +171,10 @@ async def get_leaderboard(admin=Depends(require_admin)):
 
 
 @router.get("/qualified-teams/preview")
-async def preview_top15(admin=Depends(require_admin)):
+def preview_top15(admin=Depends(require_admin)):
     """Preview the Top 15 teams without committing to DB."""
     supabase = get_supabase()
-    leaderboard = await get_leaderboard(admin)
+    leaderboard = get_leaderboard(admin)
     return {
         "top_15": leaderboard[:15],
         "total_completed": sum(1 for r in leaderboard if r["status"] == "SUBMITTED"),
@@ -182,7 +182,7 @@ async def preview_top15(admin=Depends(require_admin)):
 
 
 @router.post("/qualified-teams/confirm")
-async def confirm_top15(admin=Depends(require_admin)):
+def confirm_top15(admin=Depends(require_admin)):
     """
     Stores the Top 15 into qualified_teams table.
     Does NOT modify original attempt data.
@@ -190,7 +190,7 @@ async def confirm_top15(admin=Depends(require_admin)):
     supabase = get_supabase()
     now = utc_now()
 
-    leaderboard = await get_leaderboard(admin)
+    leaderboard = get_leaderboard(admin)
     top15 = [r for r in leaderboard if r["status"] == "SUBMITTED"][:15]
 
     if not top15:
@@ -216,9 +216,9 @@ async def confirm_top15(admin=Depends(require_admin)):
 
 
 @router.get("/export/results")
-async def export_results_csv(admin=Depends(require_admin)):
+def export_results_csv(admin=Depends(require_admin)):
     """Export full leaderboard as CSV."""
-    leaderboard = await get_leaderboard(admin)
+    leaderboard = get_leaderboard(admin)
 
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=[
@@ -238,9 +238,9 @@ async def export_results_csv(admin=Depends(require_admin)):
 
 
 @router.get("/export/top15")
-async def export_top15_csv(admin=Depends(require_admin)):
+def export_top15_csv(admin=Depends(require_admin)):
     """Export Top 15 as CSV."""
-    preview = await preview_top15(admin)
+    preview = preview_top15(admin)
     top15 = preview["top_15"]
 
     output = io.StringIO()
