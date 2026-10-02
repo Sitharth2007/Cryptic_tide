@@ -1,0 +1,19 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import List
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    SUPABASE_URL: str
+    SUPABASE_SERVICE_ROLE_KEY: str
+    SUPABASE_ANON_KEY: str
+    SECRET_KEY: str = "change-me-in-production"
+    ALLOWED_ORIGINS: str = "http://localhost:5173"
+
+    @property
+    def origins(self) -> List[str]:
+        return [o.strip() for o in self.ALLOWED_ORIGINS.split(",")]
+
+
+settings = Settings()
