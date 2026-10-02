@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "change-me-jwt-secret-in-production"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRY_HOURS: int = 12
-    ALLOWED_ORIGINS: str = "http://localhost:5173"
+    ALLOWED_ORIGINS: str = "https://cryptic-tide-cyberhub.vercel.app/"
 
     @property
     def origins(self) -> List[str]:
